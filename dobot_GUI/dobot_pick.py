@@ -13,7 +13,7 @@ Correct MovL command format (V4):
 
 Students call pick_object() with coordinates from the vision pipeline.
 """
-
+ 
 import socket
 import time
 
