@@ -16,25 +16,8 @@ Students call pick_object() with coordinates from the vision pipeline.
  
 import socket
 import time
+from config_manager import get_float, get_str, get_int, get_bool
 
-# ============================================================================
-# Connection settings
-# ============================================================================
-ROBOT_IP = "192.168.5.1"
-PORT     = 29999          # All commands go here
-
-# ============================================================================
-# Safety limits -- set by teacher
-# ============================================================================
-WORKSPACE_X_MIN = -300.0
-WORKSPACE_X_MAX =  300.0
-WORKSPACE_Y_MIN = -300.0
-WORKSPACE_Y_MAX =  300.0
-SAFE_Z          =  100.0   # mm -- safe travel height
-PICK_Z          =    5.0   # mm -- suction pick height
-DROP_POSITION   = (200.0, -200.0, 50.0)  # (X, Y, Z) in work object frame
-
-SUCTION_DELAY   = 0.5  # seconds after activating/releasing suction
 
 
 class DobotE6:
@@ -44,8 +27,13 @@ class DobotE6:
     MovL command format: MovL(pose={X,Y,Z,Rx,Ry,Rz},user=n,tool=m)
     """
 
-    def __init__(self, ip=ROBOT_IP):
+    def __init__(self, ip=None, port=None):
+        if ip is None:
+            ip = get_str("Robot Connection", "ROBOT_IP", "192.168.5.1")
+        if port is None:
+            port = get_int("Robot Connection", "ROBOT_PORT", 29999)
         self.ip  = ip
+        self.port = port
         self.sock = None
 
     # ------------------------------------------------------------------
@@ -54,10 +42,12 @@ class DobotE6:
 
     def connect(self):
         """Open TCP connection to port 29999."""
-        print(f"Connecting to {self.ip}:{PORT} ...")
+        self.ip = get_str("Robot Connection", "ROBOT_IP", self.ip)
+        self.port = get_int("Robot Connection", "ROBOT_PORT", self.port)
+        print(f"Connecting to {self.ip}:{self.port} ...")
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.settimeout(10)
-        self.sock.connect((self.ip, PORT))
+        self.sock.connect((self.ip, self.port))
         # Drain welcome banner if present
         self.sock.settimeout(1)
         try:
@@ -197,6 +187,11 @@ class DobotE6:
             user     : user coordinate system index (int) or None
             tool     : tool coordinate system index (int) or None
         """
+        if user is None:
+            user = get_int("Robot Connection", "USER_COORD_INDEX", 7)
+        if tool is None:
+            tool = get_int("Robot Connection", "TOOL_INDEX", 2)
+            
         cmd = f"MovL(pose={{{x:.4f},{y:.4f},{z:.4f},{rx:.4f},{ry:.4f},{rz:.4f}}}"
         if user is not None:
             cmd += f",user={int(user)}"
@@ -220,13 +215,15 @@ class DobotE6:
         """Activate suction cup (ToolDO index 1 — end-effector tool output)."""
         resp = self.send("ToolDO(1,1)")
         print(f"  Suction ON -> {resp}")
-        time.sleep(SUCTION_DELAY)
+        delay = get_float("Pick", "SUCTION_DELAY", 0.5)
+        time.sleep(delay)
 
     def suction_off(self):
         """Deactivate suction cup (ToolDO index 1 — end-effector tool output)."""
         resp = self.send("ToolDO(1,0)")
         print(f"  Suction OFF -> {resp}")
-        time.sleep(SUCTION_DELAY)
+        delay = get_float("Pick", "SUCTION_DELAY", 0.5)
+        time.sleep(delay)
 
 
 # ============================================================================
@@ -234,7 +231,7 @@ class DobotE6:
 # ============================================================================
 
 def pick_object(robot: DobotE6,
-                x: float, y: float, z: float = PICK_Z,
+                x: float, y: float, z: float = None,
                 rx: float = 0.0, ry: float = 0.0, rz: float = 0.0,
                 user: int = None, tool: int = None):
     """Execute a full pick-and-place sequence.
@@ -248,18 +245,32 @@ def pick_object(robot: DobotE6,
       6. Suction OFF
       7. Return to safe height
     """
+
+    if z is None:
+        z = get_float("Pick", "PICK_Z", 5.0)
+    if user is None:
+        user = get_int("Robot Connection", "USER_COORD_INDEX", 7)
+    if tool is None:
+        tool = get_int("Robot Connection", "TOOL_INDEX", 2)
+
+    safe_z = get_float("Robot Position", "SAFE_Z", 100.0)
+    drop_x = get_float("Robot Position", "DROP_X", 200.0)
+    drop_y = get_float("Robot Position", "DROP_Y", -200.0)
+    drop_z = get_float("Robot Position", "DROP_Z", 50)
+    drop_position = (drop_x, drop_y, drop_z)
+
     print(f"\n--- Pick: ({x:.1f}, {y:.1f}, {z:.1f})  user={user}  tool={tool} ---")
     kw = dict(rx=rx, ry=ry, rz=rz, user=user, tool=tool)
 
-    robot.move_to(x, y, SAFE_Z, **kw)
+    robot.move_to(x, y, safe_z, **kw)
     robot.move_to(x, y, z,      **kw)
     robot.suction_on()
-    robot.move_to(x, y, SAFE_Z, **kw)
+    robot.move_to(x, y, safe_z, **kw)
 
-    dx, dy, dz = DROP_POSITION
-    robot.move_to(dx, dy, SAFE_Z, **kw)
+    dx, dy, dz = drop_position
+    robot.move_to(dx, dy, safe_z, **kw)
     robot.move_to(dx, dy, dz,     **kw)
     robot.suction_off()
-    robot.move_to(dx, dy, SAFE_Z, **kw)
+    robot.move_to(dx, dy, safe_z, **kw)
 
     print("--- Pick complete ---\n")
