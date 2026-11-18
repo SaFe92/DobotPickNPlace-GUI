@@ -23,13 +23,14 @@ def get_bool(section, key, fallback=None):
     return config.getboolean(section, key, fallback=fallback)
 
 def set_value(section, key, value):
-    updater = ConfigUpdater()
-    updater.read(CONFIG_PATH, encoding="utf-8")
+    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        lines = f.readlines()
 
-    if section not in updater:
-        updater.add_section(section)
+    for i, line in enumerate(lines):
+        if line.lstrip().startswith(f"{key} ") or line.lstrip().startswith(f"{key}="):
+            prefix = line.split("=")[0]
+            lines[i] = f"{prefix}= {value}\n"
+            break
 
-    updater[section][key] = str(value)
-
-    with open(CONFIG_PATH, "w", encoding="utf-8") as configfile:
-        updater.write(configfile)
+    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        f.writelines(lines)

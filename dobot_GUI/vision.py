@@ -171,10 +171,10 @@ def compute_pick_targets(centroids, mm_per_pixel, marker_corners, pick_z=None):
     c3 = marker_corners[3]  # Y-riktning (längs markörens kant)
 
     # Skapa riktningsvektorer (längd 1) för X och Y
-    x_axis = c3 - c0
+    x_axis = c1 - c0
     x_unit = x_axis / np.linalg.norm(x_axis)
    
-    y_axis = c1 - c0
+    y_axis = c3 - c0
     y_unit = y_axis / np.linalg.norm(y_axis)
 
     targets = []
@@ -187,7 +187,7 @@ def compute_pick_targets(centroids, mm_per_pixel, marker_corners, pick_z=None):
         vec_to_obj = np.array([px_x, px_y]) - c0
 
         # SKALÄRPRODUKT: Hur långt ligger klossen längs X och Y?
-        wobj_x = np.dot(vec_to_obj, x_unit) * mm_per_pixel
+        wobj_x = -np.dot(vec_to_obj, x_unit) * mm_per_pixel
         wobj_y = np.dot(vec_to_obj, y_unit) * mm_per_pixel
         wobj_z = pick_z
 

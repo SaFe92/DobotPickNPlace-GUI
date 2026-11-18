@@ -5,12 +5,18 @@ import cv2
 import time
 import os
 
-def connect_robot():
+def connect_robot(ip=None, port=None):
     """Connects to the robot and returns the object"""
     try:
+        if ip is not None:
+            set_value("Robot Connection", "ROBOT_IP", ip)
+        if port is not None:
+            set_value("Robot Connection", "ROBOT_PORT", port)
+
         speed = get_int("Robot Connection", "ROBOT_SPEED", 20)
-        robot = DobotE6()
+        robot = DobotE6(ip=ip, port=port)
         robot.connect()
+        robot.request_control()
         robot.clear_error()
         robot.enable()
         robot.set_speed(speed)
@@ -33,9 +39,9 @@ def move_to_home(robot):
         home_x = get_float("Robot Position", "HOME_X", 51.7394)
         home_y = get_float("Robot Position", "HOME_Y", 100.0)
         home_z = get_float("Robot Position", "HOME_Z", 308.6934)
-        rx = get_float("Robot Position", "HOME_RX", 179.6461)
-        ry = get_float("Robot Position", "HOME_RY", 3.9245)
-        rz = get_float("Robot Position", "HOME_RZ", 89.1636)
+        rx = get_float("Robot Position", "HOME_RX", 180)
+        ry = get_float("Robot Position", "HOME_RY", 0)
+        rz = get_float("Robot Position", "HOME_RZ", 0)
 
         print(f"Moving the robot to Home: ({home_x}, {home_y}, {home_z})")
         robot.move_to(home_x, home_y, home_z, rx=rx, ry=ry, rz=rz)
@@ -52,13 +58,35 @@ def save_current_orientation_as_home(robot):
     try:
         inner = pose_resp.split("{")[1].split("}")[0]
         vals = [float(v.strip()) for v in inner.split(",")]
-        rx, ry, rz = vals[3], vals[4], vals[5]
+        x, y, z, rx, ry, rz = vals[0], vals[1], vals[2], vals[3], vals[4], vals[5]
 
+        set_value("Robot Position", "HOME_X", f"{x:.4f}")
+        set_value("Robot Position", "HOME_Y", f"{y:.4f}")
+        set_value("Robot Position", "HOME_Z", f"{z:.4f}")
         set_value("Robot Position", "HOME_RX", f"{rx:.4f}")
         set_value("Robot Position", "HOME_RY", f"{ry:.4f}")
         set_value("Robot Position", "HOME_RZ", f"{rz:.4f}")
 
-        print(f"New angles saved in config.ini: rx={rx:.4f}, ry={ry:.4f}, rz={rz:.4f}")
+        print(f"New home values saved in config.ini: x={x:.4f}, y={y:.4f}, z={z:.4f}, rx={rx:.4f}, ry={ry:.4f}, rz={rz:.4f}")
+        return True
+
+    except Exception as e:
+        print(f"Could not read angles: {e}")
+        return False
+
+def save_work_reference(robot):
+    """Reads current TCP pose from robot and saves in config.ini"""
+    pose_resp = robot.send("GetPose()")
+    try:
+        inner = pose_resp.split("{")[1].split("}")[0]
+        vals = [float(v.strip()) for v in inner.split(",")]
+        x, y, z = vals[0], vals[1], vals[2]
+
+        set_value("Pick", "X_OFFSET", f"{x:.4f}")
+        set_value("Pick", "Y_OFFSET", f"{y:.4f}")
+        set_value("Pick", "Z_OFFSET", f"{z:.4f}")
+
+        print(f"New reference values saved in config.ini: x={x:.4f}, y={y:.4f}, z={z:.4f}")
         return True
 
     except Exception as e:
@@ -198,21 +226,24 @@ def run_pick(robot, model, mm_per_pixel, marker_corners):
         
 
 if __name__ == "__main__":
-    robot = connect_robot()
+    robot = connect_robot("192.168.201.1", 29999)
+    #save_current_orientation_as_home(robot)
+    save_work_referance
 
-    model = load_roboflow_model()
+    # model = load_roboflow_model()
 
-    if robot and model:
-        mm_per_pixel, marker_corners = calibrate_system(robot)
+    # if robot and model:
+    #     mm_per_pixel, marker_corners = calibrate_system(robot)
 
-        if mm_per_pixel is not None and marker_corners is not None:
-            run_pick(robot, model, mm_per_pixel, marker_corners)
+    #     if mm_per_pixel is not None and marker_corners is not None:
+    #         for i in range(3):
+    #             run_pick(robot, model, mm_per_pixel, marker_corners)
 
-        robot.disconnect()
+    robot.disconnect()
 
     # if robot:
     #     move_to_home(robot)
-    #     robot.move_to(0, 0, 20, 179, 4, 89)
+    #     robot.move_to(0, 0, 20, 176.0745, -0.3427, -0.6613)
     #     robot.suction_on()
     #     time.sleep(3)
     #     robot.suction_off()

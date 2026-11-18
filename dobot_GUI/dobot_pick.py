@@ -172,6 +172,12 @@ class DobotE6:
             time.sleep(0.2)
         raise TimeoutError(f"Robot not idle after {timeout}s.")
 
+    def request_control(self):
+        resp = self.send("RequestControl()")
+        if self.error_id(resp) != 0:
+            print(f"Warning could not change to TCP : {resp}")
+        return resp
+
     # ------------------------------------------------------------------
     # Motion
     # ------------------------------------------------------------------
@@ -188,7 +194,7 @@ class DobotE6:
             tool     : tool coordinate system index (int) or None
         """
         if user is None:
-            user = get_int("Robot Connection", "USER_COORD_INDEX", 7)
+            user = get_int("Robot Connection", "USER_COORD_INDEX", 0)
         if tool is None:
             tool = get_int("Robot Connection", "TOOL_INDEX", 2)
             
@@ -249,7 +255,7 @@ def pick_object(robot: DobotE6,
     if z is None:
         z = get_float("Pick", "PICK_Z", 5.0)
     if user is None:
-        user = get_int("Robot Connection", "USER_COORD_INDEX", 7)
+        user = get_int("Robot Connection", "USER_COORD_INDEX", 0)
     if tool is None:
         tool = get_int("Robot Connection", "TOOL_INDEX", 2)
 
