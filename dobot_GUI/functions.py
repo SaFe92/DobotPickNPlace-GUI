@@ -228,7 +228,6 @@ def run_pick(robot, model, mm_per_pixel, marker_corners):
 if __name__ == "__main__":
     robot = connect_robot("192.168.201.1", 29999)
     #save_current_orientation_as_home(robot)
-    save_work_referance
 
     # model = load_roboflow_model()
 
