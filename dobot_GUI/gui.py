@@ -114,6 +114,9 @@ class MainWindow(QMainWindow):
         self.resize(900, 600)
 
         self.robot = None
+        self.model = None
+        self.mm_per_pixel = None
+        self.marker_corners = None
 
         self.pool = QThreadPool()
         self.pool.setMaxThreadCount(1)
@@ -400,7 +403,7 @@ class MainWindow(QMainWindow):
             if robot is not None:
                 self.robot = robot
         self.pool.start(Task(task))
-        if hasattr(self, "model"):
+        if self.model is not None:
             print("Model already loaded")
         else:
             self.load_AI_model()
@@ -428,7 +431,7 @@ class MainWindow(QMainWindow):
             if model is not None:
                 self.model = model
                 print("Model load successfully!")
-        self.run_robot(task)
+        self.pool.start(Task(task))
 
     def emergency_stop(self):
         if self.robot is None:
