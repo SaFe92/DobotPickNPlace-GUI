@@ -466,7 +466,7 @@ class MainWindow(QMainWindow):
         self._rescale_image()
 
     def run_analysis(self, IMG_PATH=None):
-        img_path = IMG_PATH if isinstance(IMG_PATH, str) else "/Users/alexander_brasegard/Documents/DobotPickNPlace-GUI/robotics_lab_package/notebooks/captured_images/img_20261019_144133.png"
+        img_path = IMG_PATH if isinstance(IMG_PATH, str) else ""
 
         if getattr(self, "model", None) is None:
             print("ERROR: Model not loaded yet!")
@@ -495,7 +495,7 @@ class MainWindow(QMainWindow):
         self.pool.start(self.current_task)
 
     def run_calibration(self, IMG_PATH=None):
-        img_path = IMG_PATH if isinstance(IMG_PATH, str) else "/Users/alexander_brasegard/Documents/DobotPickNPlace-GUI/robotics_lab_package/notebooks/captured_images/img_0039.png"
+        img_path = IMG_PATH if isinstance(IMG_PATH, str) else ""
         self.tab_widget.setCurrentIndex(2)
 
         def task():
