@@ -3,6 +3,7 @@ import sys
 import threading
 import traceback
 from datetime import datetime
+import numpy as np
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal, Qt
 from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor
@@ -15,7 +16,7 @@ from PySide6.QtWidgets import (
 from config_manager import CONFIG_PATH, get_float, get_int, get_str, set_value
 from dobot_pick import DobotE6
 from functions import ( connect_robot, move_to_home, save_current_orientation_as_home, 
-    save_work_reference, calibrate_system, run_pick)
+    save_reference_c0, save_reference_c1, calibrate_system, run_pick)
 from vision import load_roboflow_model
 
 
@@ -148,6 +149,14 @@ class MainWindow(QMainWindow):
             print(f"Session log: {self.log_file.name}")
         print("Ready. Enter the robot's IP and port, then press Connect.")
 
+        c0_x = get_float("Calibration", "C0_PX_X", 0.0)
+        c0_y = get_float("Calibration", "C0_PX_Y", 0.0)
+        c1_x = get_float("Calibration", "C1_PX_X", 0.0)
+        c1_y = get_float("Calibration", "C1_PX_Y", 0.0)
+        if c0_x != 0.0 or c0_y != 0.0 or c1_x != 0.0 or c1_y != 0.0:
+            self.marker_corners = np.array([[c0_x, c0_y], [c1_x, c1_y]], dtype=float)
+            print("Loaded saved calibration from config.ini.")
+
     def append_log(self, line, level):
         """Add one coloured line at the end of the log and scroll to it."""
         fmt = QTextCharFormat()
@@ -205,23 +214,26 @@ class MainWindow(QMainWindow):
         home_btn.clicked.connect(self.go_home)
 
         save_home_button = QPushButton("Save home")
-        save_home_button.clicked.connect(lambda: self.run_robot(lambda: save_current_orientation_as_home(self.robot)))
+        save_home_button.clicked.connect(self.save_home)
         #
 
-        save_work_reference_button = QPushButton("Save reference")
-        save_work_reference_button.clicked.connect(lambda: self.run_robot(lambda: save_work_reference(self.robot)))
+        save_c0_button = QPushButton("Save C0")
+        save_c0_button.clicked.connect(lambda: self.run_robot(lambda: save_reference_c0(self.robot)))
+
+        save_c1_button = QPushButton("Save C1")
+        save_c1_button.clicked.connect(lambda: self.run_robot(lambda: save_reference_c1(self.robot)))
         #
         calibrate_button = QPushButton("Calibrate")
         calibrate_button.clicked.connect(self.calibrate)
 
         pick_button = QPushButton("Pick one")
-        pick_button.clicked.connect(lambda: self.run_robot(lambda: run_pick(self.robot, self.model, self.mm_per_pixel, self.marker_corners)))
+        pick_button.clicked.connect(lambda: self.run_robot(lambda: run_pick(self.robot, self.model, self.marker_corners)))
 
         estop_btn = QPushButton("EMERGENCY STOP")
         estop_btn.setStyleSheet("background-color: #c62828; color: white; font-weight: bold; border-radius: 10px; padding:5px")
         estop_btn.clicked.connect(self.emergency_stop)
 
-        for btn in (enable_btn, clear_btn, home_btn, save_home_button, save_work_reference_button, calibrate_button, pick_button):
+        for btn in (enable_btn, clear_btn, home_btn, save_home_button, save_c0_button, save_c1_button, calibrate_button, pick_button):
             row.addWidget(btn)
         row.addStretch()
         row.addWidget(estop_btn)
@@ -262,6 +274,8 @@ class MainWindow(QMainWindow):
                 {"key": "X_OFFSET", "max_len": 15},
                 {"key": "Y_OFFSET", "max_len": 15},
                 {"key": "Z_OFFSET", "max_len": 15},
+                {"key": "X1_REF",       "max_len": 15},
+                {"key": "Y1_REF",       "max_len": 15},
             ],
             "Robot Connection": [
                 {"key": "ROBOT_SPEED", "max_len": 10},
@@ -416,6 +430,13 @@ class MainWindow(QMainWindow):
 
     def go_home(self):
         self.run_robot(lambda: move_to_home(self.robot))
+
+    def save_home(self):
+        def task():
+            if save_current_orientation_as_home(self.robot):
+                self.marker_corners = None
+                print("WARNING: Home-position changed. Run Calibrate (and Save C0/C1 if Aruco-marker has moved).")
+        self.run_robot(task)
 
     def calibrate(self):
         def task():

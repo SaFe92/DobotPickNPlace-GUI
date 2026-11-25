@@ -57,17 +57,18 @@ class DobotE6:
         except socket.timeout:
             pass
         self.sock.settimeout(10)
-        print("  Connected.")
 
     def disconnect(self):
         """Close the connection."""
         if self.sock:
             try:
                 self.sock.close()
+                print("Disconnected.")
             except Exception:
+                print("Disconnect failed.")
                 pass
             self.sock = None
-        print("Disconnected.")
+        
 
     # ------------------------------------------------------------------
     # Low-level send / receive
