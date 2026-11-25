@@ -188,7 +188,7 @@ class MainWindow(QMainWindow):
         self.port_edit.setFixedWidth(70)
 
         connect_btn = QPushButton("Connect and Enable")
-        connect_btn.clicked.connect(self.connect)
+        connect_btn.clicked.connect(self.on_connect)
         disconnect_btn = QPushButton("Disconnect")
         disconnect_btn.clicked.connect(self.disconnect_robot)
 
@@ -405,7 +405,7 @@ class MainWindow(QMainWindow):
             btn.setText("Edit")
 
 
-    def connect(self):
+    def on_connect(self):
         try:
             port = int(self.port_edit.text())
         except ValueError:

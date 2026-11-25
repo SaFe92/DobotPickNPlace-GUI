@@ -43,6 +43,7 @@ class LiveFeedWindow(MainWindow):
         return widget
 
     def start_camera_feed(self):
+        self.stop_camera_feed()
         self.camera_feed = CameraFeed(parent=self)
         self.camera_feed.frame_ready.connect(self.show_frame)
         self.camera_feed.failed.connect(lambda msg: print(f"ERROR: {msg}", file=sys.stderr))
