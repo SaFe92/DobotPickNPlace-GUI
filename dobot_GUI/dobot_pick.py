@@ -57,17 +57,18 @@ class DobotE6:
         except socket.timeout:
             pass
         self.sock.settimeout(10)
-        print("  Connected.")
 
     def disconnect(self):
         """Close the connection."""
         if self.sock:
             try:
                 self.sock.close()
+                print("Disconnected.")
             except Exception:
+                print("Disconnect failed.")
                 pass
             self.sock = None
-        print("Disconnected.")
+        
 
     # ------------------------------------------------------------------
     # Low-level send / receive
@@ -196,7 +197,7 @@ class DobotE6:
         if user is None:
             user = get_int("Robot Connection", "USER_COORD_INDEX", 0)
         if tool is None:
-            tool = get_int("Robot Connection", "TOOL_INDEX", 2)
+            tool = get_int("Robot Connection", "TOOL_INDEX", 0)
             
         cmd = f"MovL(pose={{{x:.4f},{y:.4f},{z:.4f},{rx:.4f},{ry:.4f},{rz:.4f}}}"
         if user is not None:

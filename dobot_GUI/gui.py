@@ -3,6 +3,7 @@ import sys
 import threading
 import traceback
 from datetime import datetime
+import numpy as np
 import cv2
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal, Qt
@@ -16,7 +17,7 @@ from PySide6.QtWidgets import (
 from config_manager import CONFIG_PATH, get_float, get_int, get_str, set_value
 from dobot_pick import DobotE6
 from functions import ( connect_robot, move_to_home, save_current_orientation_as_home, 
-    save_work_reference, calibrate_system, run_pick)
+    save_reference_c0, save_reference_c1, calibrate_system, run_pick)
 from vision import load_roboflow_model, process_predictions, run_inference
 
 
@@ -119,6 +120,9 @@ class MainWindow(QMainWindow):
         self.showFullScreen()
 
         self.robot = None
+        self.model = None
+        self.mm_per_pixel = None
+        self.marker_corners = None
 
         self.pool = QThreadPool()
         self.pool.setMaxThreadCount(1)
@@ -152,6 +156,14 @@ class MainWindow(QMainWindow):
             print(f"Session log: {self.log_file.name}")
         print("Ready. Enter the robot's IP and port, then press Connect.")
 
+        c0_x = get_float("Calibration", "C0_PX_X", 0.0)
+        c0_y = get_float("Calibration", "C0_PX_Y", 0.0)
+        c1_x = get_float("Calibration", "C1_PX_X", 0.0)
+        c1_y = get_float("Calibration", "C1_PX_Y", 0.0)
+        if c0_x != 0.0 or c0_y != 0.0 or c1_x != 0.0 or c1_y != 0.0:
+            self.marker_corners = np.array([[c0_x, c0_y], [c1_x, c1_y]], dtype=float)
+            print("Loaded saved calibration from config.ini.")
+
     def append_log(self, line, level):
         """Add one coloured line at the end of the log and scroll to it."""
         fmt = QTextCharFormat()
@@ -183,7 +195,7 @@ class MainWindow(QMainWindow):
         self.port_edit.setFixedWidth(70)
 
         connect_btn = QPushButton("Connect and Enable")
-        connect_btn.clicked.connect(self.connect)
+        connect_btn.clicked.connect(self.on_connect)
         disconnect_btn = QPushButton("Disconnect")
         disconnect_btn.clicked.connect(self.disconnect_robot)
 
@@ -209,11 +221,14 @@ class MainWindow(QMainWindow):
         home_btn.clicked.connect(self.go_home)
 
         save_home_button = QPushButton("Save home")
-        save_home_button.clicked.connect(lambda: self.run_robot(lambda: save_current_orientation_as_home(self.robot)))
+        save_home_button.clicked.connect(self.save_home)
         #
 
-        save_work_reference_button = QPushButton("Save reference")
-        save_work_reference_button.clicked.connect(lambda: self.run_robot(lambda: save_work_reference(self.robot)))
+        save_c0_button = QPushButton("Save C0")
+        save_c0_button.clicked.connect(lambda: self.run_robot(lambda: save_reference_c0(self.robot)))
+
+        save_c1_button = QPushButton("Save C1")
+        save_c1_button.clicked.connect(lambda: self.run_robot(lambda: save_reference_c1(self.robot)))
         #
         calibrate_button = QPushButton("Calibrate")
         calibrate_button.clicked.connect(self.calibrate)
@@ -241,7 +256,7 @@ class MainWindow(QMainWindow):
         estop_btn.setStyleSheet("background-color: #c62828; color: white; font-weight: bold; border-radius: 10px; padding:5px")
         estop_btn.clicked.connect(self.emergency_stop)
 
-        for btn in (enable_btn, clear_btn, home_btn, save_home_button, save_work_reference_button, calibrate_button, pick_button,
+        for btn in (enable_btn, clear_btn, home_btn, save_home_button, save_c0_button, save_c1_button, calibrate_button, pick_button,
                     segmentation_button, load_model_button):
             row.addWidget(btn)
         row.addStretch()
@@ -283,6 +298,8 @@ class MainWindow(QMainWindow):
                 {"key": "X_OFFSET", "max_len": 15},
                 {"key": "Y_OFFSET", "max_len": 15},
                 {"key": "Z_OFFSET", "max_len": 15},
+                {"key": "X1_REF",       "max_len": 15},
+                {"key": "Y1_REF",       "max_len": 15},
             ],
             "Robot Connection": [
                 {"key": "ROBOT_SPEED", "max_len": 10},
@@ -520,7 +537,7 @@ class MainWindow(QMainWindow):
             btn.setText("Edit")
 
 
-    def connect(self):
+    def on_connect(self):
         try:
             port = int(self.port_edit.text())
         except ValueError:
@@ -532,7 +549,7 @@ class MainWindow(QMainWindow):
             if robot is not None:
                 self.robot = robot
         self.pool.start(Task(task))
-        if hasattr(self, "model"):
+        if self.model is not None:
             print("Model already loaded")
         else:
             self.load_AI_model()
@@ -543,6 +560,13 @@ class MainWindow(QMainWindow):
 
     def go_home(self):
         self.run_robot(lambda: move_to_home(self.robot))
+
+    def save_home(self):
+        def task():
+            if save_current_orientation_as_home(self.robot):
+                self.marker_corners = None
+                print("WARNING: Home-position changed. Run Calibrate (and Save C0/C1 if Aruco-marker has moved).")
+        self.run_robot(task)
 
     def calibrate(self):
         def task():
@@ -559,7 +583,7 @@ class MainWindow(QMainWindow):
             if model is not None:
                 self.model = model
                 print("Model load successfully!")
-        self.pool.start(Task(task)) # fixa tillbaka till self.run_robot(task)
+        self.pool.start(Task(task))
 
     def emergency_stop(self):
         if self.robot is None:

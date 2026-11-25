@@ -252,46 +252,58 @@ def detect_aruco_and_calibrate(image=None, marker_size_mm=None, aruco_dict=None)
         return mm_per_pixel, c0_px, c, disp
 
 
-def compute_pick_targets(centroids, mm_per_pixel, marker_corners, pick_z=None):
+def compute_pick_targets(centroids, marker_corners, pick_z=None):
     if pick_z is None:
         pick_z = get_float("Pick", "PICK_Z", 10)
-    if mm_per_pixel is None or marker_corners is None:
+    if marker_corners is None:
         print("ERROR: Run calibration first.")
         return []
 
-    # Plocka ut hörnen från markören
-    c0 = marker_corners[0]  # Origo
-    c1 = marker_corners[1]  # X-riktning (längs markörens kant)
-    c3 = marker_corners[3]  # Y-riktning (längs markörens kant)
+    # C0 och C1 i pixelrymden (från kalibreringsbilden)
+    # c0_px = marker_corners[0].astype(float)
+    # c1_px = marker_corners[1].astype(float)
+    # Konvertera från bildkoordinater (+Y nedåt) till högerhänt (+Y uppåt)
+    c0_px = np.array([marker_corners[0][0], -marker_corners[0][1]], dtype=float)
+    c1_px = np.array([marker_corners[1][0], -marker_corners[1][1]], dtype=float)
 
-    # Skapa riktningsvektorer (längd 1) för X och Y
-    x_axis = c1 - c0
-    x_unit = x_axis / np.linalg.norm(x_axis)
+    # C0 och C1 i robotens basram (från save_reference_c0 och save_reference_c1)
+    rx0 = get_float("Pick", "X_OFFSET", 0.0)
+    ry0 = get_float("Pick", "Y_OFFSET", 0.0)
+    rx1 = get_float("Pick", "X1_REF", 0.0)
+    ry1 = get_float("Pick", "Y1_REF", 0.0)
    
-    y_axis = c3 - c0
-    y_unit = y_axis / np.linalg.norm(y_axis)
+    # Vektorer C0 → C1 i respektive rymd
+    v_px    = c1_px - c0_px
+    v_robot = np.array([rx1 - rx0, ry1 - ry0])
 
+    if np.linalg.norm(v_robot) < 1.0:
+        print("ERROR: C1-referens ej sparad eller identisk med C0. Joga till C1 och tryck 'Save C1'.")
+        return []
+
+    # Skala (mm/pixel) – beräknad ur faktiska robotmätningar, mer exakt än markörstorleken
+    scale = np.linalg.norm(v_robot) / np.linalg.norm(v_px)
+   
+    # Rotationsvinkel: hur mycket pixelvektorer ska roteras för att passa robotramen
+    theta = np.arctan2(v_robot[1], v_robot[0]) - np.arctan2(v_px[1], v_px[0])
+    cos_t, sin_t = np.cos(theta), np.sin(theta)
     targets = []
-    print(f"Scale: {mm_per_pixel:.4f} mm/pixel")
-   
-    for c in centroids:
-        px_x, px_y = c['centroid_px']
-       
-        # Vektor från C0 till klossen
-        vec_to_obj = np.array([px_x, px_y]) - c0
-
-        # SKALÄRPRODUKT: Hur långt ligger klossen längs X och Y?
-        wobj_x = -np.dot(vec_to_obj, x_unit) * mm_per_pixel
-        wobj_y = np.dot(vec_to_obj, y_unit) * mm_per_pixel
-        wobj_z = pick_z
-
+    for detection in centroids:
+        px_x, px_y = detection['centroid_px']
+        vec_px = np.array([px_x, -px_y]) - c0_px   # vektor C0 → objekt i pixlar
+        vec_mm = vec_px * scale                     # skala till mm
+        # Rotera från kameraaxlar till robotbasaxlar
+        obj_rx = cos_t * vec_mm[0] - sin_t * vec_mm[1]
+        obj_ry = sin_t * vec_mm[0] + cos_t * vec_mm[1]
+        # Absolut robotposition = C0:s position + relativ förflyttning
+        robot_x = rx0 + obj_rx
+        robot_y = ry0 + obj_ry
         targets.append({
-            'class': c['class'],
-            'confidence': c['confidence'],
-            'centroid_px': c['centroid_px'],
-            'robot_target': (round(wobj_x, 1), round(wobj_y, 1), round(wobj_z, 1)),
+            'class':       detection['class'],
+            'confidence':  detection['confidence'],
+            'centroid_px': detection['centroid_px'],
+            'robot_target': (round(robot_x, 1), round(robot_y, 1), round(pick_z, 1)),
         })
-       
-        print(f"Hittade {c['class']} -> Robotmål: X={wobj_x:.1f}, Y={wobj_y:.1f}")
+
+        print(f"Hittade {detection['class']} -> Robotmål: X={robot_x:.1f}, Y={robot_y:.1f}")
 
     return targets
