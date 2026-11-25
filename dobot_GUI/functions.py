@@ -21,7 +21,10 @@ def connect_robot(ip=None, port=None):
         robot.enable()
         robot.set_speed(speed)
         print(f"\nRobot mode: {robot.get_mode()}")  # Should be 5 (idle/enabled)
-        print("Robot ready.")
+        if robot.get_mode() == 5:
+            print("Robot ready.")
+        else:
+            print("Connection sequence failed.")
 
         return robot
     except Exception as e:
@@ -67,6 +70,12 @@ def save_current_orientation_as_home(robot):
         set_value("Robot Position", "HOME_RY", f"{ry:.4f}")
         set_value("Robot Position", "HOME_RZ", f"{rz:.4f}")
 
+        # Reset the calibration because home has changed
+        set_value("Calibration", "C0_PX_X", "0.0")
+        set_value("Calibration", "C0_PX_Y", "0.0")
+        set_value("Calibration", "C1_PX_X", "0.0")
+        set_value("Calibration", "C1_PX_Y", "0.0")
+
         print(f"New home values saved in config.ini: x={x:.4f}, y={y:.4f}, z={z:.4f}, rx={rx:.4f}, ry={ry:.4f}, rz={rz:.4f}")
         return True
 
@@ -74,8 +83,8 @@ def save_current_orientation_as_home(robot):
         print(f"Could not read angles: {e}")
         return False
 
-def save_work_reference(robot):
-    """Reads current TCP pose from robot and saves in config.ini"""
+def save_reference_c0(robot):
+    """Reads current TCP pose from robot and saves Aruco C0 in config.ini"""
     pose_resp = robot.send("GetPose()")
     try:
         inner = pose_resp.split("{")[1].split("}")[0]
@@ -86,12 +95,30 @@ def save_work_reference(robot):
         set_value("Pick", "Y_OFFSET", f"{y:.4f}")
         set_value("Pick", "Z_OFFSET", f"{z:.4f}")
 
-        print(f"New reference values saved in config.ini: x={x:.4f}, y={y:.4f}, z={z:.4f}")
+        print(f"C0 reference values saved in config.ini: x={x:.4f}, y={y:.4f}, z={z:.4f}")
         return True
 
     except Exception as e:
         print(f"Could not read angles: {e}")
         return False
+
+def save_reference_c1(robot):
+    """Reads current TCP pose from robot and saves Aruco C1 in config.ini"""
+    pose_resp = robot.send("GetPose()")
+    try:
+        inner = pose_resp.split("{")[1].split("}")[0]
+        vals = [float(v.strip()) for v in inner.split(",")]
+        x, y = vals[0], vals[1]
+
+        set_value("Pick", "X1_REF", f"{x:.4f}")
+        set_value("Pick", "Y1_REF", f"{y:.4f}")
+
+        print(f"C1 reference values saved in config.ini: x={x:.4f}, y={y:.4f}")
+        return True
+
+    except Exception as e:
+        print(f"Could not read angles: {e}")
+        return False   
     
 def calibrate_system(robot=None):
     """Calibrates aruco-marker to find mm_per_pixel and corners"""
@@ -108,6 +135,14 @@ def calibrate_system(robot=None):
     if mm_per_pixel is None or marker_corners is None:
         print("Calibration failed: No marker was found")
         return None, None
+
+    # Save C0 and C1 i pixels so the calibration remains after restart of GUI
+    c0_px = marker_corners[0]
+    c1_px = marker_corners[1]
+    set_value("Calibration", "C0_PX_X", f"{c0_px[0]:.2f}")
+    set_value("Calibration", "C0_PX_Y", f"{c0_px[1]:.2f}")
+    set_value("Calibration", "C1_PX_X", f"{c1_px[0]:.2f}")
+    set_value("Calibration", "C1_PX_Y", f"{c1_px[1]:.2f}")   
 
     print("Calibration success.")
     print(f"mm_per_pixel = {mm_per_pixel:.4f}")
@@ -142,7 +177,7 @@ def test_capture(robot=None):
         print(f"Could not take picture: {e}")
         return None
 
-def run_pick(robot, model, mm_per_pixel, marker_corners):
+def run_pick(robot, model, marker_corners):
     """Run the complete vision-to-pick pipeline."""
     print("=" * 60)
     print("FULL PIPELINE")
@@ -154,7 +189,7 @@ def run_pick(robot, model, mm_per_pixel, marker_corners):
     if model is None:
         print("ERROR: No Roboflow-model is loaded")
         return False
-    if mm_per_pixel is None or marker_corners is None:
+    if marker_corners is None:
         print("ERROR: System not calibrated yet.")
         return False
 
@@ -190,7 +225,7 @@ def run_pick(robot, model, mm_per_pixel, marker_corners):
         
         # Step 4: Compute pick targets 
         print("\n[4/5] Computing pick targets...")          
-        targets = compute_pick_targets(centroids, mm_per_pixel, marker_corners)
+        targets = compute_pick_targets(centroids, marker_corners)
         if not targets:
             print("Could not calculate targets! Canceling.")
             return False
@@ -198,17 +233,15 @@ def run_pick(robot, model, mm_per_pixel, marker_corners):
         # Step 5: Robot Picks targets
         best = targets[0]
         tx, ty, tz = best['robot_target']
-        tx_adj = tx + get_float("Pick", "X_OFFSET", 0)
-        ty_adj = ty + get_float("Pick", "Y_OFFSET", 0)
         tz_adj = tz + get_float("Pick", "Z_OFFSET", 0)
 
         rx = get_float("Robot Position", "HOME_RX", 179.6461)
         ry = get_float("Robot Position", "HOME_RY", 3.9245)
         rz = get_float("Robot Position", "HOME_RZ", 89.1636)
 
-        print(f"\n[5/5] Picking {best['class']} at ({tx_adj:.1f}, {ty_adj:.1f}, {tz_adj:.1f})...")
+        print(f"\n[5/5] Picking {best['class']} at ({tx:.1f}, {ty:.1f}, {tz_adj:.1f})...")
 
-        pick_object(robot, tx_adj, ty_adj, tz_adj, rx=rx, ry=ry, rz=rz)
+        pick_object(robot, tx, ty, tz_adj, rx=rx, ry=ry, rz=rz)
         print("Pick successful!")
 
         move_to_home(robot)
@@ -236,7 +269,7 @@ if __name__ == "__main__":
 
     #     if mm_per_pixel is not None and marker_corners is not None:
     #         for i in range(3):
-    #             run_pick(robot, model, mm_per_pixel, marker_corners)
+    #             run_pick(robot, model, marker_corners)
 
     robot.disconnect()
 
