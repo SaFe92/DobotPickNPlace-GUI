@@ -93,7 +93,7 @@ def save_work_reference(robot):
         print(f"Could not read angles: {e}")
         return False
     
-def calibrate_system(robot=None):
+def calibrate_system(robot=None, image=None):
     """Calibrates aruco-marker to find mm_per_pixel and corners"""
 
     if robot is not None:
@@ -101,19 +101,19 @@ def calibrate_system(robot=None):
         success = move_to_home(robot)
         if not success:
             print("Could not reach home position, canceling calibration")
-            return None, None
+            return None, None, None, disp
 
     print("Captures an image and looks for arucomarker")
-    mm_per_pixel, marker_corners = detect_aruco_and_calibrate()
+    mm_per_pixel, c0_px, marker_corners, disp = detect_aruco_and_calibrate()
     if mm_per_pixel is None or marker_corners is None:
         print("Calibration failed: No marker was found")
-        return None, None
+        return None, None, None, disp
 
     print("Calibration success.")
     print(f"mm_per_pixel = {mm_per_pixel:.4f}")
     print(f"C0 = {marker_corners[0]}")
 
-    return mm_per_pixel, marker_corners
+    return mm_per_pixel, c0_px, marker_corners, disp
 
 def test_capture(robot=None):
     """Takes a picture and saves it at test_capture.png"""
@@ -142,7 +142,7 @@ def test_capture(robot=None):
         print(f"Could not take picture: {e}")
         return None
 
-def run_pick(robot, model, mm_per_pixel, marker_corners):
+def run_pick(robot, model, mm_per_pixel, marker_corners, image_callback=None):
     """Run the complete vision-to-pick pipeline."""
     print("=" * 60)
     print("FULL PIPELINE")
@@ -182,11 +182,14 @@ def run_pick(robot, model, mm_per_pixel, marker_corners):
         # Step 3: Run AI inference
         print("\n[3/5] Running Roboflow-detection...")        
         result = run_inference(model, temp_image_path)
-        centroids = process_predictions(frame, result)
+        processed_image, centroids = process_predictions(frame, result)
         print(f"  Found {len(centroids)} object(s)")
         if not centroids:
             print("No objects detected! Canceling.")
             return False
+
+        if image_callback is not None:
+            image_callback(processed_image)
         
         # Step 4: Compute pick targets 
         print("\n[4/5] Computing pick targets...")          
@@ -228,7 +231,6 @@ def run_pick(robot, model, mm_per_pixel, marker_corners):
 if __name__ == "__main__":
     robot = connect_robot("192.168.201.1", 29999)
     #save_current_orientation_as_home(robot)
-    save_work_referance
 
     # model = load_roboflow_model()
 

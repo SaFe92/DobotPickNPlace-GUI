@@ -3,6 +3,8 @@ import cv2
 from roboflow import Roboflow
 import numpy as np
 
+
+
 def capture_single_frame(use_webcam=None):
     """Capture a single frame from camera (no preview)."""
     if use_webcam is None:
@@ -63,42 +65,62 @@ def run_inference(model, image_path, confidence=None):
     
     return prediction.json()
 
+import cv2
+import numpy as np
+
+# Predefined tab10 color palette in BGR format
+TAB10_BGR = (
+    (180, 119, 31), (14, 127, 255), (44, 160, 44), (40, 39, 214), (189, 103, 148),
+    (75, 86, 140), (194, 119, 227), (127, 127, 127), (34, 189, 188), (207, 190, 23)
+)
 
 def process_predictions(image_bgr, result_json):
     """
     Calculates centroids and Visualize segmentation results on the image.
-    (Behöver lägga till kod för att få en bild med markerade konturer.)
     """
+    # Size settings for cross marker and label text
+    cross_size = 45
+    cross_thickness = 6
+    text_scale = 1.4
+    text_thickness = 3
 
     processed_image = image_bgr.copy()
+    mask_overlay = processed_image.copy()
     detections = result_json.get("predictions", [])
     centroids = []
 
-    for det in detections:
+    if not detections:
+        return processed_image, centroids
+
+    h, w = processed_image.shape[:2]
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    pad = 10
+    offset = 20
+    parsed_items = []
+
+    for i, det in enumerate(detections):
         class_name = det['class']
         confidence = det['confidence']
+        color = TAB10_BGR[i % 10]
 
         if 'points' in det:
-            pts = np.array([(p['x'], p['y']) for p in det['points']])
+            pts = np.array([(p['x'], p['y']) for p in det['points']], dtype=np.int32)
 
-            # --------------------
-            # Kod för färgade konturer
-            # --------------------
+            # Code for colored contours
+            cv2.fillPoly(mask_overlay, [pts], color)
 
             # Compute centroid
-            M = cv2.moments(pts.astype(np.int32))
+            M = cv2.moments(pts)
             if M['m00'] > 0:
                 cx = M['m10'] / M['m00']
                 cy = M['m01'] / M['m00']
             else:
                 cx, cy = det['x'], det['y']
         else:
+            pts = None
             cx, cy = det['x'], det['y']
 
-        # --------------------
-        # Kod för att markera centroids på bilden
-        # --------------------
-
+        parsed_items.append((pts, color, class_name, confidence, cx, cy))
 
         # Save the centroids
         centroids.append({
@@ -107,7 +129,52 @@ def process_predictions(image_bgr, result_json):
             'centroid_px': (round(cx, 1), round(cy, 1))
         })
 
-    return centroids
+    print(f"Segmentation Results — {len(detections)} object(s) detected")
+
+    # Blend semi-transparent polygon fills
+    cv2.addWeighted(mask_overlay, 0.3, processed_image, 0.7, 0, dst=processed_image)
+
+    for pts, color, class_name, confidence, cx, cy in parsed_items:
+        if pts is not None:
+            cv2.polylines(processed_image, [pts], isClosed=True, color=color, thickness=3, lineType=cv2.LINE_AA)
+
+        # Code to mark centroids on the image
+        cx_int, cy_int = int(round(cx)), int(round(cy))
+        cv2.drawMarker(
+            processed_image, (cx_int, cy_int), color=(0, 0, 255),
+            markerType=cv2.MARKER_CROSS, markerSize=cross_size,
+            thickness=cross_thickness, line_type=cv2.LINE_AA
+        )
+
+        # Draw label with semi-transparent background box
+        label = f"{class_name} ({confidence:.2f})"
+        (text_w, text_h), baseline = cv2.getTextSize(label, font, text_scale, text_thickness)
+
+        box_x1 = cx_int + offset
+        box_y1 = cy_int + offset
+        box_x2 = box_x1 + text_w + pad * 2
+        box_y2 = box_y1 + text_h + baseline + pad * 2
+
+        if box_x2 > w:
+            box_x1 = max(0, cx_int - text_w - pad * 2 - offset)
+            box_x2 = box_x1 + text_w + pad * 2
+        if box_y2 > h:
+            box_y1 = max(0, cy_int - text_h - baseline - pad * 2 - offset)
+            box_y2 = box_y1 + text_h + baseline + pad * 2
+
+        roi = processed_image[box_y1:box_y2, box_x1:box_x2]
+        if roi.size > 0:
+            bg = np.empty_like(roi)
+            bg[:] = color
+            cv2.addWeighted(bg, 0.8, roi, 0.2, 0, dst=roi)
+
+        cv2.putText(
+            processed_image, label, (box_x1 + pad, box_y1 + text_h + pad),
+            font, text_scale, (255, 255, 255), text_thickness, cv2.LINE_AA
+        )
+
+    return processed_image, centroids
+
 
 
 def detect_aruco_and_calibrate(image=None, marker_size_mm=None, aruco_dict=None):
@@ -129,33 +196,60 @@ def detect_aruco_and_calibrate(image=None, marker_size_mm=None, aruco_dict=None)
 
     mm_per_pixel = None  # Reset before computing
     c0_px = None         # Pixel position of ArUco corner C0 (the work object origin)
+    disp = image.copy()  # Keep in BGR format to match the GUI display methods
 
     if ids is None or len(ids) == 0:
         print("ERROR: No ArUco marker detected in the image.")
         print("Check: Is the marker fully visible, flat, and well-lit?")
         print("Check: Are you using a DICT_5X5_50 marker?")
-        print("       Generate one at: https://chev.me/arucogen/")
-        return None, None
-    
-    # Measure the side length in pixels from corner 0 to corner 1
-    c = corners[0][0]
-    side_px = float(np.linalg.norm(c[0] - c[1]))
-    mm_per_pixel = marker_size_mm / side_px
+        print("       Generate one at: https://chev.me")
+        return None, None, None, disp
+    else:
+        # Measure the side length in pixels from corner 0 to corner 1
+        c = corners[0][0]
+        side_px = float(np.linalg.norm(c[0] - c[1]))
+        mm_per_pixel = marker_size_mm / side_px
 
-    # C0 is corner 0 of the first detected marker — this is the work object origin
-    c0_px = c[0]  # (x, y) in pixels
+        # C0 is corner 0 of the first detected marker — this is the work object origin
+        c0_px = c[0]  # (x, y) in pixels
 
-    print(f"Marker detected — ID: {ids[0]}")
-    print(f"Marker side: {side_px:.1f} px  |  Physical size: {marker_size_mm} mm")
-    print(f"Scale: {mm_per_pixel:.4f} mm/pixel")
-    print(f"Work object origin C0: pixel ({c0_px[0]:.1f}, {c0_px[1]:.1f})")
+        print(f"Marker detected — ID: {ids[0]}")
+        print(f"Marker side: {side_px:.1f} px  |  Physical size: {marker_size_mm} mm")
+        print(f"Scale: {mm_per_pixel:.4f} mm/pixel")
+        print(f"Work object origin C0: pixel ({c0_px[0]:.1f}, {c0_px[1]:.1f})")
 
-    # -----------------
-    # Samma här med att man behöver rita ut pilarna på bilden + returnera bilden?
-    # -----------------
+        # Draw detected marker outline and axes in BGR
+        cv2.aruco.drawDetectedMarkers(disp, corners, ids)
 
-    return mm_per_pixel, c
-    
+        axis_len = side_px * 1.5
+        origin = (int(c[0][0]), int(c[0][1]))
+
+        # X axis: C0 -> C1 direction (Red in BGR: (0, 0, 255))
+        x_dir = c[1] - c[0]
+        x_dir = x_dir / np.linalg.norm(x_dir) * axis_len
+        x_end = (int(c[0][0] + x_dir[0]), int(c[0][1] + x_dir[1]))
+        cv2.arrowedLine(disp, origin, x_end, (0, 0, 255), 3, tipLength=0.035, line_type=cv2.LINE_AA)
+        dx, dy = x_dir / np.linalg.norm(x_dir) * 35
+        ex, ey = x_end
+        cv2.putText(disp, 'X', (int(ex + dx - 12), int(ey + dy + 12)), cv2.FONT_HERSHEY_SIMPLEX, 1.3, (0, 0, 255), 3, cv2.LINE_AA)
+
+
+
+        # Y axis: C0 -> C3 direction (Lime in BGR: (0, 255, 0))
+        y_dir = c[3] - c[0]
+        y_dir = y_dir / np.linalg.norm(y_dir) * axis_len
+        y_end = (int(c[0][0] + y_dir[0]), int(c[0][1] + y_dir[1]))
+        cv2.arrowedLine(disp, origin, y_end, (0, 255, 0), 3, tipLength=0.035, line_type=cv2.LINE_AA)
+        dx, dy = y_dir / np.linalg.norm(y_dir) * 35
+        ex, ey = y_end
+        cv2.putText(disp, 'Y', (int(ex + dx - 12), int(ey + dy + 12)), cv2.FONT_HERSHEY_SIMPLEX, 1.3, (0, 255, 0), 3, cv2.LINE_AA)
+
+
+        # Mark the origin C0 (Yellow in BGR: (0, 255, 255))
+        cv2.circle(disp, origin, 16, (0, 255, 255), -1, lineType=cv2.LINE_AA)
+
+
+        return mm_per_pixel, c0_px, c, disp
 
 
 def compute_pick_targets(centroids, mm_per_pixel, marker_corners, pick_z=None):

@@ -3,20 +3,21 @@ import sys
 import threading
 import traceback
 from datetime import datetime
+import cv2
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal, Qt
-from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor
+from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor, QImage, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
     QMainWindow, QPlainTextEdit, QPushButton, QVBoxLayout, QWidget, QTabWidget, QGridLayout, QComboBox,
-    QSizePolicy, QScrollArea
+    QSizePolicy, QScrollArea, QProgressDialog
 )
 
 from config_manager import CONFIG_PATH, get_float, get_int, get_str, set_value
 from dobot_pick import DobotE6
 from functions import ( connect_robot, move_to_home, save_current_orientation_as_home, 
     save_work_reference, calibrate_system, run_pick)
-from vision import load_roboflow_model
+from vision import load_roboflow_model, process_predictions, run_inference
 
 
 COLOR_WARNING = "#e6a200"
@@ -94,24 +95,28 @@ class LogStream(QObject):
     def flush(self):
         self._original.flush()
 
-
+class TaskSignals(QObject):
+    finished = Signal(object)
+    error = Signal(str)
 class Task(QRunnable):
 
     def __init__(self, fn):
         super().__init__()
         self.fn = fn
+        self.signals = TaskSignals()
 
     def run(self):
         try:
-            self.fn()
+            result = self.fn()
+            self.signals.finished.emit(result)
         except Exception as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
-
+            self.signals.error.emit(str(exc))
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Dobot Pick-and-Place")
-        self.resize(900, 600)
+        self.showFullScreen()
 
         self.robot = None
 
@@ -120,6 +125,8 @@ class MainWindow(QMainWindow):
 
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
+
+        self.tab_widget = self._build_tabs()
 
         self._orig_stdout = sys.stdout
         self._orig_stderr = sys.stderr
@@ -137,7 +144,7 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(central)
         layout.addWidget(self._build_connection_group())
         layout.addWidget(self._build_robot_group())
-        layout.addWidget(self._build_tabs(), stretch=3)
+        layout.addWidget(self.tab_widget, stretch=4)
         layout.addWidget(self.log, stretch=1)
         self.setCentralWidget(central)
 
@@ -212,13 +219,30 @@ class MainWindow(QMainWindow):
         calibrate_button.clicked.connect(self.calibrate)
 
         pick_button = QPushButton("Pick one")
-        pick_button.clicked.connect(lambda: self.run_robot(lambda: run_pick(self.robot, self.model, self.mm_per_pixel, self.marker_corners)))
+        pick_button.clicked.connect(
+            lambda: self.run_robot(
+                lambda: run_pick(
+                    self.robot, 
+                    self.model, 
+                    self.mm_per_pixel, 
+                    self.marker_corners, 
+                    image_callback=lambda img: self.display_in_pyside(img, None, self.result_image_label)
+                )
+            )
+        )
+
+        load_model_button = QPushButton("Load model")
+        load_model_button.clicked.connect(self.load_AI_model)
+
+        segmentation_button = QPushButton("Segmentation")
+        segmentation_button.clicked.connect(self.run_analysis)
 
         estop_btn = QPushButton("EMERGENCY STOP")
         estop_btn.setStyleSheet("background-color: #c62828; color: white; font-weight: bold; border-radius: 10px; padding:5px")
         estop_btn.clicked.connect(self.emergency_stop)
 
-        for btn in (enable_btn, clear_btn, home_btn, save_home_button, save_work_reference_button, calibrate_button, pick_button):
+        for btn in (enable_btn, clear_btn, home_btn, save_home_button, save_work_reference_button, calibrate_button, pick_button,
+                    segmentation_button, load_model_button):
             row.addWidget(btn)
         row.addStretch()
         row.addWidget(estop_btn)
@@ -298,10 +322,26 @@ class MainWindow(QMainWindow):
         scroll.setWidget(content)
 
         tab2 = QWidget()
-        QVBoxLayout(tab2).addWidget(QLabel("Step 1......."))
+        layout2 = QVBoxLayout(tab2)
+        layout2.setContentsMargins(0, 0, 0, 0)
+
+        self.result_image_label = QLabel("Segmentation results")
+        self.result_image_label.setAlignment(Qt.AlignCenter)
+        self.result_image_label.setMinimumSize(1, 1)
+        layout2.addWidget(self.result_image_label)
+
+        tab3 = QWidget()
+        layout3 = QVBoxLayout(tab3)
+        layout3.setContentsMargins(0, 0, 0, 0)
+
+        self.aruco_image_label = QLabel("Aruco marker detection")
+        self.aruco_image_label.setAlignment(Qt.AlignCenter)
+        self.aruco_image_label.setMinimumSize(1, 1)
+        layout3.addWidget(self.aruco_image_label)
 
         tabs.addTab(scroll, "Config panel")
-        tabs.addTab(tab2, "Guide")
+        tabs.addTab(tab2, "Segmentation")
+        tabs.addTab(tab3, "Calibration")
         return tabs
 
     def _add_category(self, layout, section, fields, cols=5):
@@ -364,6 +404,98 @@ class MainWindow(QMainWindow):
         btn.clicked.connect(lambda: self.toggle_edit(section_widgets, btn))
         layout.addLayout(cat_box)
 
+    def display_in_pyside(self, image_bgr, result_json=None, label_widget=None):
+        if result_json is not None:
+            processed_image, centroids = process_predictions(image_bgr, result_json)
+        else:
+            processed_image = image_bgr
+
+        image_rgb = cv2.cvtColor(processed_image, cv2.COLOR_BGR2RGB)
+        h, w, ch = image_rgb.shape
+        bytes_per_line = ch * w
+        
+        qt_image = QImage(image_rgb.data, w, h, bytes_per_line, QImage.Format_RGB888).copy()
+        pixmap = QPixmap.fromImage(qt_image)
+
+        # Save to the matching pixmap variable so they never mix up
+        if label_widget is self.aruco_image_label:
+            self.aruco_pixmap = pixmap
+        else:
+            self.result_pixmap = pixmap
+
+        self._rescale_image()
+
+    def _rescale_image(self):
+        # Rescale segmentation image if it exists
+        if getattr(self, "result_pixmap", None) is not None:
+            scaled_result = self.result_pixmap.scaled(
+                self.result_image_label.size(),
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation
+            )
+            self.result_image_label.setPixmap(scaled_result)
+
+        # Rescale ArUco calibration image if it exists
+        if getattr(self, "aruco_pixmap", None) is not None:
+            scaled_aruco = self.aruco_pixmap.scaled(
+                self.aruco_image_label.size(),
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation
+            )
+            self.aruco_image_label.setPixmap(scaled_aruco)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._rescale_image()
+
+    def run_analysis(self, IMG_PATH=None):
+        img_path = IMG_PATH if isinstance(IMG_PATH, str) else "/Users/alexander_brasegard/Documents/DobotPickNPlace-GUI/robotics_lab_package/notebooks/captured_images/img_20261019_144133.png"
+
+        if getattr(self, "model", None) is None:
+            print("ERROR: Model not loaded yet!")
+            return
+
+        self.tab_widget.setCurrentIndex(1)
+
+        self.loading_dialog = QProgressDialog("Segmenting image...", "", 0, 0, self)
+        self.loading_dialog.setCancelButton(None)
+        self.loading_dialog.setWindowModality(Qt.WindowModal)
+        self.loading_dialog.show()
+
+        def task():
+            image_bgr = cv2.imread(img_path)
+            if image_bgr is None:
+                raise FileNotFoundError(f"Image not found: {img_path}")
+            return image_bgr, run_inference(self.model, img_path)
+
+        self.current_task = Task(task)
+        self.current_task.signals.finished.connect(lambda res: (
+            self.loading_dialog.close(),
+            self.tab_widget.setCurrentIndex(1),
+            self.display_in_pyside(res[0], res[1], self.result_image_label)
+        ))
+        self.current_task.signals.error.connect(lambda err: self.loading_dialog.close())
+        self.pool.start(self.current_task)
+
+    def run_calibration(self, IMG_PATH=None):
+        img_path = IMG_PATH if isinstance(IMG_PATH, str) else "/Users/alexander_brasegard/Documents/DobotPickNPlace-GUI/robotics_lab_package/notebooks/captured_images/img_0039.png"
+        self.tab_widget.setCurrentIndex(2)
+
+        def task():
+            image_bgr = cv2.imread(img_path)
+            return calibrate_system(None, image_bgr)
+
+        self.current_task = Task(task)
+        self.current_task.signals.finished.connect(lambda res: (
+            setattr(self, "mm_per_pixel", res[0]),
+            setattr(self, "c0_px", res[1]),
+            setattr(self, "marker_corners", res[2]),
+            self.display_in_pyside(res[3], None, self.aruco_image_label)
+        ))
+        self.pool.start(self.current_task)
+
+
+
     def toggle_edit(self, section_widgets, btn):
         first = section_widgets[0][2]
         locked = first.isReadOnly() if isinstance(first, QLineEdit) else not first.isEnabled()
@@ -405,8 +537,6 @@ class MainWindow(QMainWindow):
         else:
             self.load_AI_model()
 
-
-
     def disconnect_robot(self):
         if self.robot is not None:
             self.run_robot(self.robot.disconnect)
@@ -416,11 +546,12 @@ class MainWindow(QMainWindow):
 
     def calibrate(self):
         def task():
-            mm_per_pixel, marker_corners = calibrate_system(self.robot)
+            mm_per_pixel, c0_px, marker_corners, disp = calibrate_system(self.robot)
             if mm_per_pixel is not None and marker_corners is not None:
+                self.display_in_pyside(disp, None, self.aruco_image_label)
                 self.mm_per_pixel = mm_per_pixel
                 self.marker_corners = marker_corners
-        self.run_robot(task)
+        self.pool.start(Task(task)) # fixa tillbaka till self.run_robot(task)
 
     def load_AI_model(self):
         def task():
@@ -428,7 +559,7 @@ class MainWindow(QMainWindow):
             if model is not None:
                 self.model = model
                 print("Model load successfully!")
-        self.run_robot(task)
+        self.pool.start(Task(task)) # fixa tillbaka till self.run_robot(task)
 
     def emergency_stop(self):
         if self.robot is None:
