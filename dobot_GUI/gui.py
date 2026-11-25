@@ -117,7 +117,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Dobot Pick-and-Place")
-        self.showFullScreen()
+        self.showNormal()
 
         self.robot = None
         self.model = None
@@ -239,7 +239,6 @@ class MainWindow(QMainWindow):
                 lambda: run_pick(
                     self.robot, 
                     self.model, 
-                    self.mm_per_pixel, 
                     self.marker_corners, 
                     image_callback=lambda img: self.display_in_pyside(img, None, self.result_image_label)
                 )
