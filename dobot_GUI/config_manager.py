@@ -93,24 +93,14 @@ def get_bool(section, key, fallback=None):
 
 
 def set_value(section, key, value):
-    """Write a value to ``config.ini`` and save the file.
+    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        lines = f.readlines()
 
-    The file is rewritten with ``ConfigUpdater``, which keeps existing comments
-    and formatting. The section is created if it does not exist. The value is
-    converted to ``str`` before it is stored.
+    for i, line in enumerate(lines):
+        if line.lstrip().startswith(f"{key} ") or line.lstrip().startswith(f"{key}="):
+            prefix = line.split("=")[0]
+            lines[i] = f"{prefix}= {value}\n"
+            break
 
-    Args:
-        section: Name of the ``[section]`` to write to.
-        key: Name of the key to set. It is created if it does not exist.
-        value: The value to store. Any type is accepted and stored as text.
-    """
-    updater = ConfigUpdater()
-    updater.read(CONFIG_PATH, encoding="utf-8")
-
-    if section not in updater:
-        updater.add_section(section)
-
-    updater[section][key] = str(value)
-
-    with open(CONFIG_PATH, "w", encoding="utf-8") as configfile:
-        updater.write(configfile)
+    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        f.writelines(lines)

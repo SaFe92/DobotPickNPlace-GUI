@@ -57,17 +57,18 @@ class DobotE6:
         except socket.timeout:
             pass
         self.sock.settimeout(10)
-        print("  Connected.")
 
     def disconnect(self):
         """Close the connection."""
         if self.sock:
             try:
                 self.sock.close()
+                print("Disconnected.")
             except Exception:
+                print("Disconnect failed.")
                 pass
             self.sock = None
-        print("Disconnected.")
+        
 
     # ------------------------------------------------------------------
     # Low-level send / receive
@@ -172,6 +173,12 @@ class DobotE6:
             time.sleep(0.2)
         raise TimeoutError(f"Robot not idle after {timeout}s.")
 
+    def request_control(self):
+        resp = self.send("RequestControl()")
+        if self.error_id(resp) != 0:
+            print(f"Warning could not change to TCP : {resp}")
+        return resp
+
     # ------------------------------------------------------------------
     # Motion
     # ------------------------------------------------------------------
@@ -188,9 +195,9 @@ class DobotE6:
             tool     : tool coordinate system index (int) or None
         """
         if user is None:
-            user = get_int("Robot Connection", "USER_COORD_INDEX", 7)
+            user = get_int("Robot Connection", "USER_COORD_INDEX", 0)
         if tool is None:
-            tool = get_int("Robot Connection", "TOOL_INDEX", 2)
+            tool = get_int("Robot Connection", "TOOL_INDEX", 0)
             
         cmd = f"MovL(pose={{{x:.4f},{y:.4f},{z:.4f},{rx:.4f},{ry:.4f},{rz:.4f}}}"
         if user is not None:
@@ -249,7 +256,7 @@ def pick_object(robot: DobotE6,
     if z is None:
         z = get_float("Pick", "PICK_Z", 5.0)
     if user is None:
-        user = get_int("Robot Connection", "USER_COORD_INDEX", 7)
+        user = get_int("Robot Connection", "USER_COORD_INDEX", 0)
     if tool is None:
         tool = get_int("Robot Connection", "TOOL_INDEX", 2)
 
